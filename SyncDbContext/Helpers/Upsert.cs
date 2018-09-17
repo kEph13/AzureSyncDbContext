@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Data.Entity.Core.Mapping;
 using System.Data.Entity.Core.Metadata.Edm;
+using System.Data.Entity.Core.Objects;
 using System.Data.Entity.Infrastructure;
 using System.Data.SqlTypes;
 using System.Linq;
@@ -41,7 +42,7 @@ namespace SyncDbContext.Helpers
         }
     }
 
-    public abstract class EntityOp<TEntity, TRet>
+    public abstract class EntityOp<TEntity, TRet> where TEntity : class
     {
         public readonly DbContext _context;
         public readonly IEnumerable<TEntity> _entityList;
@@ -65,7 +66,7 @@ namespace SyncDbContext.Helpers
             return member.Member.Name;
         }
 
-        public EntityOp(DbContext context, IEnumerable<TEntity> entityList)
+        public EntityOp(DbContext context, IEnumerable<TEntity> entityList) 
         {
             _context = context;
             _entityList = entityList;
@@ -125,7 +126,19 @@ namespace SyncDbContext.Helpers
             _propNames.Remove(GetMemberName(selectField));
             return this;
         }
+        
+        private static IEnumerable<string> GetKeyNames(Type type, DbContext context)
+        {
+            ObjectContext objectContext = ((IObjectContextAdapter)context).ObjectContext;
+            ObjectSet<TEntity> set = objectContext.CreateObjectSet<TEntity>();
+            IEnumerable<string> keyNames = set.EntitySet.ElementType
+                                                        .KeyMembers
+                                                        .Select(k => k.Name);
 
+            return keyNames;
+        }
+
+        //Only works for database first
         private static EntitySetMapping GetEntitySetMapping(Type type, DbContext context)
         {
             var objContext = ((IObjectContextAdapter)context).ObjectContext;
@@ -134,9 +147,10 @@ namespace SyncDbContext.Helpers
             // Get the part of the model that contains info about the actual CLR types
             var objectItemCollection = ((ObjectItemCollection)metadata.GetItemCollection(DataSpace.OSpace));
 
+            var entityItems = metadata.GetItems<EntityType>(DataSpace.OSpace);
+
             // Get the entity type from the model that maps to the CLR type
-            var entityType = metadata
-                    .GetItems<EntityType>(DataSpace.OSpace)
+            var entityType = entityItems
                     .Single(e => objectItemCollection.GetClrType(e) == type);
 
             // Get the entity set that uses this entity type
@@ -155,7 +169,7 @@ namespace SyncDbContext.Helpers
         }
     }
 
-    public class UpsertOp<TEntity> : EntityOp<TEntity, int>
+    public class UpsertOp<TEntity> : EntityOp<TEntity, int> where TEntity : class
     {
 
         public UpsertOp(DbContext context, IEnumerable<TEntity> entityList) : base(context, entityList)
