@@ -14,7 +14,7 @@ namespace SyncDbContext.Models
         Task LoadItemsNeedingSync(SyncDbContext context);
         Task SyncItems(SyncDbContext targetContext, int targetNumber);
         Task UpdateStatuses(SyncDbContext sourceContext);
-        List<Exception> Errors { get; set; }
+        ConcurrentBag<Exception> Errors { get; set; }
     }
 
     public class SyncModel<T> : ISyncModel where T : class
@@ -24,22 +24,29 @@ namespace SyncDbContext.Models
 
         public List<T> ItemsChanged { get; set; }
 
-        private ConcurrentDictionary<T, ulong> SyncSuccess { get; set; }
+        private ConcurrentDictionary<T, long> SyncSuccess { get; set; }
 
-        public List<Exception> Errors { get; set; }
+        public ConcurrentBag<Exception> Errors { get; set; } = new ConcurrentBag<Exception>();
 
         //This should run first
         public async Task LoadItemsNeedingSync(SyncDbContext sourceContext)
         {
-            ItemsChanged = await sourceContext.Set<T>().Where(SyncNeeded).ToListAsync();
-            SyncSuccess = new ConcurrentDictionary<T, ulong>();
-            foreach(var item in ItemsChanged)
+            try
             {
-                SyncSuccess[item] = 0;
+                ItemsChanged = await sourceContext.Set<T>().Where(SyncNeeded).ToListAsync();
+                SyncSuccess = new ConcurrentDictionary<T, long>();
+                foreach (var item in ItemsChanged)
+                {
+                    SyncSuccess[item] = 0;
+                }
+            }catch(Exception ex)
+            {
+                throw new Exception("Error during item load: ", ex);
             }
+            
         }
 
-        private void updateSuccess(T item, ulong successFlag)
+        private void updateSuccess(T item, long successFlag)
         {
             SyncSuccess.AddOrUpdate(item, successFlag, (key, oldValue) =>
             {
@@ -51,7 +58,7 @@ namespace SyncDbContext.Models
         public async Task SyncItems(SyncDbContext targetContext, int targetNumber)
         {
             bool success = true;
-            var successFlag = Convert.ToUInt64(1 << targetNumber);
+            var successFlag = Convert.ToInt64(1 << targetNumber);
             try
             {
                 //Try to one-shot the updates
@@ -95,7 +102,7 @@ namespace SyncDbContext.Models
             var syncColumnProp = typeof(T).GetProperty(SyncColumnName);
             foreach(var item in ItemsChanged)
             {
-                if (SyncSuccess.TryGetValue(item, out ulong result))
+                if (SyncSuccess.TryGetValue(item, out long result))
                 {
                     syncColumnProp.SetValue(item, result);
                 }

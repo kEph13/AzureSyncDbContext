@@ -1,21 +1,17 @@
-﻿using Mono.Linq.Expressions;
-using SyncDbContext.Attributes;
+﻿using SyncDbContext.Attributes;
 using SyncDbContext.Helpers;
 using SyncDbContext.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Threading.Tasks;
 
 namespace SyncDbContext
 {
     public class SyncDbContext : DbContext
     {
-        private readonly bool isTarget;
         private readonly List<string> targetConnectionStrings;
         private readonly long completeStatusValue;
         private readonly ConcurrentDictionary<object, long> flagStatuses;
@@ -23,20 +19,18 @@ namespace SyncDbContext
 
         public SyncDbContext(string sourceConnectionString, List<string> targetConnectionStrings) : base(sourceConnectionString)
         {
-            isTarget = false;
             this.targetConnectionStrings = targetConnectionStrings;
 
             //this represents all targets sync'd - i.e. 1111 for 4 targets
-            completeStatusValue = (2 ^ targetConnectionStrings.Count()) - 1;
+            completeStatusValue = Convert.ToInt64(Math.Pow(2, targetConnectionStrings.Count()) - 1);
             flagStatuses = new ConcurrentDictionary<object, long>();
         }
 
         private SyncDbContext(string targetConnectionString) : base(targetConnectionString)
         {
-            isTarget = true;
         }
 
-        public void AddToSyncList<T>() where T : class
+        protected void AddToSyncList<T>() where T : class
         {
             var model = new SyncModel<T>();
             var typeName = typeof(T).Name;

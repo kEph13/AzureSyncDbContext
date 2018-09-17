@@ -128,7 +128,8 @@ namespace SyncDbContext.Helpers
 
         private static EntitySetMapping GetEntitySetMapping(Type type, DbContext context)
         {
-            var metadata = ((IObjectContextAdapter)context).ObjectContext.MetadataWorkspace;
+            var objContext = ((IObjectContextAdapter)context).ObjectContext;
+            var metadata = objContext.MetadataWorkspace;
 
             // Get the part of the model that contains info about the actual CLR types
             var objectItemCollection = ((ObjectItemCollection)metadata.GetItemCollection(DataSpace.OSpace));
