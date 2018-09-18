@@ -28,6 +28,8 @@ namespace SyncDbContext.Models
 
         public ConcurrentBag<Exception> Errors { get; set; } = new ConcurrentBag<Exception>();
 
+        public UpsertModel<T> UpsertModel { get; set; }
+
         //This should run first
         public async Task LoadItemsNeedingSync(SyncDbContext sourceContext)
         {
@@ -62,7 +64,7 @@ namespace SyncDbContext.Models
             try
             {
                 //Try to one-shot the updates
-                var result = await targetContext.Upsert(ItemsChanged);
+                var result = await targetContext.Upsert(ItemsChanged, UpsertModel);
                 //todo: check value
                 foreach(var item in ItemsChanged)
                 {
@@ -83,7 +85,7 @@ namespace SyncDbContext.Models
                 {
                     try
                     {
-                        var result = await targetContext.Upsert(item);
+                        var result = await targetContext.Upsert(item, UpsertModel);
                         //todo: check value
 
                         updateSuccess(item, successFlag);

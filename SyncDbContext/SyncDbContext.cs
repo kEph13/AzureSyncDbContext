@@ -47,6 +47,9 @@ namespace SyncDbContext
 
             model.SyncNeeded = ExpressionHelper.CheckItemInequality<T>(syncColumnName, completeStatusValue);
 
+            model.UpsertModel = EntityHelper<T>.GetUpsertModel(this);
+            model.UpsertModel.SyncColumn = syncColumnName;
+
             models.Add(model);
         }
 
