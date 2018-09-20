@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
@@ -14,7 +15,7 @@ namespace SyncDbContext.Models
     {
         Task LoadItemsNeedingSync(SyncDbContext context);
         Task SyncItems(SyncDbContext targetContext, int targetNumber);
-        Task UpdateStatuses(SyncDbContext sourceContext);
+        void UpdateStatuses();
         ConcurrentBag<Exception> Errors { get; set; }
     }
 
@@ -38,9 +39,13 @@ namespace SyncDbContext.Models
             {
                 ItemsChanged = await sourceContext.Set<T>().Where(SyncNeeded).ToListAsync();
                 SyncSuccess = new ConcurrentDictionary<T, long>();
-                foreach (var item in ItemsChanged)
+                if (ItemsChanged.Count > 0)
                 {
-                    SyncSuccess[item] = GetSyncValue(item);
+                    Console.WriteLine($"{ItemsChanged.Count} {typeof(T).Name} rows to sync.");
+                    foreach (var item in ItemsChanged)
+                    {
+                        SyncSuccess[item] = GetSyncValue(item);
+                    }
                 }
             }
             catch (Exception ex)
@@ -97,12 +102,13 @@ namespace SyncDbContext.Models
                         var items = itemsToSync.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
                         var result = await targetContext.Upsert(items, UpsertModel);
                         //todo: check result
-                        foreach(var item in items)
+                        foreach (var item in items)
                         {
                             UpdateSuccess(item, successFlag);
                         }
                     }
-                }catch(Exception ex)
+                }
+                catch (Exception ex)
                 {
                     Errors.Add(ex);
                     success = false;
@@ -164,22 +170,28 @@ namespace SyncDbContext.Models
         }
 
         //Lastly this to update statuses
-        public async Task UpdateStatuses(SyncDbContext sourceContext)
+        public void UpdateStatuses()
         {
-            foreach (var item in ItemsChanged)
+            try
             {
-                if (SyncSuccess.TryGetValue(item, out long result))
+                foreach (var item in ItemsChanged)
                 {
-                    UpdateSyncColumn(item, result);
+                    if (SyncSuccess.TryGetValue(item, out long result))
+                    {
+                        UpdateSyncColumn(item, result);
+                    }
+                    else
+                    {
+                        Errors.Add(new Exception("No stored success result for item with type " + typeof(T).Name));
+                    }
                 }
-                else
-                {
-                    Errors.Add(new Exception("No stored success result for item with type " + typeof(T).Name));
-                }
+
+            }
+            catch (Exception ex)
+            {
+                Errors.Add(ex);
             }
 
-            //todo check data drift
-            await sourceContext.SaveChangesAsync();
         }
     }
 
