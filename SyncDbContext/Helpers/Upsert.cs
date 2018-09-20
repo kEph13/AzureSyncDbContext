@@ -1,4 +1,5 @@
 ﻿using SyncDbContext.Attributes;
+using SyncDbContext.Exceptions;
 using SyncDbContext.Models;
 using System;
 using System.Collections.Generic;
@@ -37,7 +38,16 @@ namespace SyncDbContext.Helpers
 
         public static async Task<int> Upsert<TEntity>(this DbContext context, List<TEntity> entities, UpsertModel<TEntity> model) where TEntity : class
         {
-            return await new UpsertOp<TEntity>(context, entities, model).Execute();
+            var propCount = model.PropertyNames.Count;
+            if ((propCount * entities.Count) > 2000)
+            {
+                throw new TooManyItemsException();
+             
+            }
+            else
+            {
+                return await new UpsertOp<TEntity>(context, entities, model).Execute();
+            }
         }
     }
 

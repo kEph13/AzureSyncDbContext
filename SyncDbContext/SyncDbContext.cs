@@ -72,7 +72,6 @@ namespace SyncDbContext
                         errors.Add(new Exception("Error occurred during item load", ex));
                         models.Remove(model);
                     }
-
                 }
 
                 var syncTasks = new List<Task>();
@@ -114,7 +113,6 @@ namespace SyncDbContext
                 throw new AggregateException("Errors occurred: ", errors);
             }
         }
-
 
         private async Task SyncToTarget(string target, int targetNumber)
         {

@@ -42,6 +42,15 @@ namespace SyncDbContext.Helpers
                     .Single(s => s.EntitySet == entitySet);
         }
 
+        // Alternative, allows you to compare `== Identity`, `== Computed`, `!= None`, etc:
+        public static StoreGeneratedPattern GetSSpaceScalarColumnStoreGeneratedPattern(EdmProperty property)
+        {
+            MetadataProperty item;
+            return property.MetadataProperties.TryGetValue("http://schemas.microsoft.com/ado/2009/02/edm/annotation:StoreGeneratedPattern", false, out item)
+                ? (StoreGeneratedPattern)Enum.Parse(typeof(StoreGeneratedPattern), item.Value.ToString())
+                : System.Data.Entity.Core.Metadata.Edm.StoreGeneratedPattern.None;
+        }
+
         public static UpsertModel<TEntity> GetUpsertModel(DbContext context)
         {
             var mapping = GetEntitySetMapping(typeof(TEntity), context);
@@ -52,10 +61,12 @@ namespace SyncDbContext.Helpers
                 .Fragments.Single()
                 .PropertyMappings
                 .OfType<ScalarPropertyMapping>()
+                .Where(p => GetSSpaceScalarColumnStoreGeneratedPattern(p.Property) != StoreGeneratedPattern.Computed) //don't want to update computed columns
                 .ToDictionary(m => m.Property.Name, m => '[' + m.Column.Name + ']');
 
             var keyNames = mapping.EntitySet.ElementType.KeyMembers
-                .ToLookup(k => k.IsStoreGeneratedIdentity, k => k.Name);
+                .ToLookup(k => (k.IsStoreGeneratedIdentity), k => k.Name);
+
 
             var _entityPrimaryKeyNames = keyNames.SelectMany(k => k).ToList();
 

@@ -1,4 +1,5 @@
-﻿using SyncDbContext.Helpers;
+﻿using SyncDbContext.Exceptions;
+using SyncDbContext.Helpers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -41,11 +42,12 @@ namespace SyncDbContext.Models
                 {
                     SyncSuccess[item] = 0;
                 }
-            }catch(Exception ex)
+            }
+            catch (Exception ex)
             {
                 throw new Exception("Error during item load: ", ex);
             }
-            
+
         }
 
         private void updateSuccess(T item, long successFlag)
@@ -59,17 +61,45 @@ namespace SyncDbContext.Models
         //Then this one, on each target
         public async Task SyncItems(SyncDbContext targetContext, int targetNumber)
         {
+            if (ItemsChanged.Count == 0)
+            {
+                return;
+            }
             bool success = true;
             var successFlag = Convert.ToInt64(1 << targetNumber);
             try
             {
+
                 //Try to one-shot the updates
                 var result = await targetContext.Upsert(ItemsChanged, UpsertModel);
                 //todo: check value
-                foreach(var item in ItemsChanged)
+                foreach (var item in ItemsChanged)
                 {
                     updateSuccess(item, successFlag);
                 }
+            }
+            catch (TooManyItemsException)
+            {
+                try
+                {
+                    //batch
+                    var allowedEntityCount = 2000 / UpsertModel.PropertyNames.Count;
+                    for (int i = 0; i < Math.Ceiling(ItemsChanged.Count / Convert.ToDecimal(allowedEntityCount)); i++)
+                    {
+                        var items = ItemsChanged.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
+                        var result = await targetContext.Upsert(items, UpsertModel);
+                        //todo: check result
+                        foreach(var item in items)
+                        {
+                            updateSuccess(item, successFlag);
+                        }
+                    }
+                }catch(Exception ex)
+                {
+                    Errors.Add(ex);
+                    success = false;
+                }
+                
             }
             catch (Exception ex)
             {
@@ -81,16 +111,24 @@ namespace SyncDbContext.Models
             if (!success)
             {
                 //If that failed, run one by one
-                foreach(var item in ItemsChanged)
+                foreach (var item in ItemsChanged)
                 {
                     try
                     {
-                        var result = await targetContext.Upsert(item, UpsertModel);
-                        //todo: check value
+                        var done = false;
+                        if (SyncSuccess.TryGetValue(item, out long value))
+                        {
+                            done = (value & successFlag) > 0;
+                        }
+                        if (!done)
+                        {
+                            var result = await targetContext.Upsert(item, UpsertModel);
+                            //todo: check value
 
-                        updateSuccess(item, successFlag);
+                            updateSuccess(item, successFlag);
+                        }
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         Errors.Add(ex);
                     }
@@ -102,7 +140,7 @@ namespace SyncDbContext.Models
         public async Task UpdateStatuses(SyncDbContext sourceContext)
         {
             var syncColumnProp = typeof(T).GetProperty(SyncColumnName);
-            foreach(var item in ItemsChanged)
+            foreach (var item in ItemsChanged)
             {
                 if (SyncSuccess.TryGetValue(item, out long result))
                 {

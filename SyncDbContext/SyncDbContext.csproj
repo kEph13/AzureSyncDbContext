@@ -55,6 +55,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Attributes\SyncColumn.cs" />
+    <Compile Include="Exceptions\TooManyItemsException.cs" />
     <Compile Include="Helpers\CollectionExtensions.cs" />
     <Compile Include="Helpers\EntityHelper.cs" />
     <Compile Include="Helpers\Expressions.cs" />
