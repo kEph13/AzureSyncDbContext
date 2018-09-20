@@ -67,8 +67,7 @@ namespace SyncDbContext.Helpers
 
         private static string GetMemberName<T>(Expression<Func<TEntity, T>> selectMemberLambda)
         {
-            var member = selectMemberLambda.Body as MemberExpression;
-            if (member == null)
+            if (!(selectMemberLambda.Body is MemberExpression member))
             {
                 throw new ArgumentException("The parameter selectMemberLambda must be a member accessing labda such as x => x.Id", "selectMemberLambda");
             }

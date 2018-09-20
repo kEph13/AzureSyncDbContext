@@ -40,7 +40,7 @@ namespace SyncDbContext.Models
                 SyncSuccess = new ConcurrentDictionary<T, long>();
                 foreach (var item in ItemsChanged)
                 {
-                    SyncSuccess[item] = 0;
+                    SyncSuccess[item] = GetSyncValue(item);
                 }
             }
             catch (Exception ex)
@@ -50,7 +50,7 @@ namespace SyncDbContext.Models
 
         }
 
-        private void updateSuccess(T item, long successFlag)
+        private void UpdateSuccess(T item, long successFlag)
         {
             SyncSuccess.AddOrUpdate(item, successFlag, (key, oldValue) =>
             {
@@ -65,17 +65,25 @@ namespace SyncDbContext.Models
             {
                 return;
             }
-            bool success = true;
             var successFlag = Convert.ToInt64(1 << targetNumber);
+
+            var itemsToSync = ItemsChanged.Where(i => !CheckSyncColumn(i, successFlag)).ToList();
+
+            if (itemsToSync.Count == 0)
+            {
+                return;
+            }
+
+            bool success = true;
             try
             {
 
                 //Try to one-shot the updates
-                var result = await targetContext.Upsert(ItemsChanged, UpsertModel);
+                var result = await targetContext.Upsert(itemsToSync, UpsertModel);
                 //todo: check value
-                foreach (var item in ItemsChanged)
+                foreach (var item in itemsToSync)
                 {
-                    updateSuccess(item, successFlag);
+                    UpdateSuccess(item, successFlag);
                 }
             }
             catch (TooManyItemsException)
@@ -84,14 +92,14 @@ namespace SyncDbContext.Models
                 {
                     //batch
                     var allowedEntityCount = 2000 / UpsertModel.PropertyNames.Count;
-                    for (int i = 0; i < Math.Ceiling(ItemsChanged.Count / Convert.ToDecimal(allowedEntityCount)); i++)
+                    for (int i = 0; i < Math.Ceiling(itemsToSync.Count / Convert.ToDecimal(allowedEntityCount)); i++)
                     {
-                        var items = ItemsChanged.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
+                        var items = itemsToSync.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
                         var result = await targetContext.Upsert(items, UpsertModel);
                         //todo: check result
                         foreach(var item in items)
                         {
-                            updateSuccess(item, successFlag);
+                            UpdateSuccess(item, successFlag);
                         }
                     }
                 }catch(Exception ex)
@@ -99,7 +107,6 @@ namespace SyncDbContext.Models
                     Errors.Add(ex);
                     success = false;
                 }
-                
             }
             catch (Exception ex)
             {
@@ -111,7 +118,7 @@ namespace SyncDbContext.Models
             if (!success)
             {
                 //If that failed, run one by one
-                foreach (var item in ItemsChanged)
+                foreach (var item in itemsToSync)
                 {
                     try
                     {
@@ -125,7 +132,7 @@ namespace SyncDbContext.Models
                             var result = await targetContext.Upsert(item, UpsertModel);
                             //todo: check value
 
-                            updateSuccess(item, successFlag);
+                            UpdateSuccess(item, successFlag);
                         }
                     }
                     catch (Exception ex)
@@ -136,15 +143,34 @@ namespace SyncDbContext.Models
             }
         }
 
+        private void UpdateSyncColumn(T item, long flag)
+        {
+            var syncColumnProp = typeof(T).GetProperty(SyncColumnName);
+            syncColumnProp.SetValue(item, flag);
+
+        }
+
+        private long GetSyncValue(T item)
+        {
+            var syncColumnProp = typeof(T).GetProperty(SyncColumnName);
+            var value = (long)syncColumnProp.GetValue(item);
+            return value;
+        }
+
+        private bool CheckSyncColumn(T item, long flag)
+        {
+            var value = GetSyncValue(item);
+            return (value & flag) > 0;
+        }
+
         //Lastly this to update statuses
         public async Task UpdateStatuses(SyncDbContext sourceContext)
         {
-            var syncColumnProp = typeof(T).GetProperty(SyncColumnName);
             foreach (var item in ItemsChanged)
             {
                 if (SyncSuccess.TryGetValue(item, out long result))
                 {
-                    syncColumnProp.SetValue(item, result);
+                    UpdateSyncColumn(item, result);
                 }
                 else
                 {
@@ -152,6 +178,7 @@ namespace SyncDbContext.Models
                 }
             }
 
+            //todo check data drift
             await sourceContext.SaveChangesAsync();
         }
     }

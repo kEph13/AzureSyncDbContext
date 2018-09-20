@@ -45,8 +45,7 @@ namespace SyncDbContext.Helpers
         // Alternative, allows you to compare `== Identity`, `== Computed`, `!= None`, etc:
         public static StoreGeneratedPattern GetSSpaceScalarColumnStoreGeneratedPattern(EdmProperty property)
         {
-            MetadataProperty item;
-            return property.MetadataProperties.TryGetValue("http://schemas.microsoft.com/ado/2009/02/edm/annotation:StoreGeneratedPattern", false, out item)
+            return property.MetadataProperties.TryGetValue("http://schemas.microsoft.com/ado/2009/02/edm/annotation:StoreGeneratedPattern", false, out MetadataProperty item)
                 ? (StoreGeneratedPattern)Enum.Parse(typeof(StoreGeneratedPattern), item.Value.ToString())
                 : System.Data.Entity.Core.Metadata.Edm.StoreGeneratedPattern.None;
         }
