@@ -50,14 +50,18 @@ namespace SyncDbContext.Helpers
                 : System.Data.Entity.Core.Metadata.Edm.StoreGeneratedPattern.None;
         }
 
-        public static UpsertModel<TEntity> GetUpsertModel(DbContext context)
+        public static UpsertModel<TEntity> GetUpsertModel(DbContext context, string schema = "dbo")
         {
             var mapping = GetEntitySetMapping(typeof(TEntity), context);
             // Get the name of the primary key for the table as we wish to exclude this from the column mapping (we are assuming Identity insert is OFF)
             //https://romiller.com/2015/08/05/ef6-1-get-mapping-between-properties-and-columns/
-            var _propNames = mapping
+
+            //If you're doing split entities to separate sync logic, recommend using a different schema and this filter
+            var fragment = mapping
                 .EntityTypeMappings.Single()
-                .Fragments.Single()
+                .Fragments.Where(f => f.StoreEntitySet.Schema == schema).First();
+
+            var _propNames = fragment
                 .PropertyMappings
                 .OfType<ScalarPropertyMapping>()
                 .Where(p => GetSSpaceScalarColumnStoreGeneratedPattern(p.Property) != StoreGeneratedPattern.Computed) //don't want to update computed columns
@@ -65,7 +69,6 @@ namespace SyncDbContext.Helpers
 
             var keyNames = mapping.EntitySet.ElementType.KeyMembers
                 .ToLookup(k => (k.IsStoreGeneratedIdentity), k => k.Name);
-
 
             var _entityPrimaryKeyNames = keyNames.SelectMany(k => k).ToList();
 
@@ -77,9 +80,7 @@ namespace SyncDbContext.Helpers
             var _storeGeneratedPrimaryKeyNames = keyNames[true].ToList();
 
             // Find the storage entity set (table) that the entity is mapped
-            var table = mapping
-                .EntityTypeMappings.Single()
-                .Fragments.Single()
+            var table = fragment
                 .StoreEntitySet;
 
             // Return the table name from the storage entity set

@@ -4,6 +4,7 @@ using SyncDbContext.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Data;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading;
@@ -17,7 +18,7 @@ namespace SyncDbContext
         private readonly long completeStatusValue;
         private readonly ConcurrentDictionary<object, long> flagStatuses;
         private readonly List<ISyncModel> models = new List<ISyncModel>();
-        private static SemaphoreSlim semaphore = new SemaphoreSlim(0, 1);
+        private static SemaphoreSlim semaphore = new SemaphoreSlim(1, 1);
 
         public Action FinishedAction { get; set; }
 
@@ -56,6 +57,8 @@ namespace SyncDbContext
             model.UpsertModel = EntityHelper<TEntity>.GetUpsertModel(this);
             model.UpsertModel.SyncColumn = syncColumnName;
 
+            model.Log = (string msg) => Log?.Invoke(msg);
+
             models.Add(model);
         }
 
@@ -76,13 +79,23 @@ namespace SyncDbContext
                         try
                         {
                             //Load items that need sync
-                            await model.LoadItemsNeedingSync(this);
+                            var itemsToSync = await model.LoadItemsNeedingSync(this);
+                            if (!itemsToSync)
+                            {
+                                models.Remove(model);
+                            }
                         }
                         catch (Exception ex)
                         {
                             errors.Add(new Exception("Error occurred during item load", ex));
                             models.Remove(model);
                         }
+                    }
+
+                    if (models.Count == 0)
+                    {
+                        Log?.Invoke("Nothing to sync");
+                        return;
                     }
 
                     var syncTasks = new List<Task>();

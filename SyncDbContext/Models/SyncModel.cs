@@ -4,7 +4,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
@@ -13,10 +12,11 @@ namespace SyncDbContext.Models
 {
     public interface ISyncModel
     {
-        Task LoadItemsNeedingSync(SyncDbContext context);
+        Task<bool> LoadItemsNeedingSync(SyncDbContext context);
         Task SyncItems(SyncDbContext targetContext, int targetNumber);
         void UpdateStatuses();
         ConcurrentBag<Exception> Errors { get; set; }
+        Action<string> Log { get; set; }
     }
 
     public class SyncModel<T> : ISyncModel where T : class
@@ -32,20 +32,30 @@ namespace SyncDbContext.Models
 
         public UpsertModel<T> UpsertModel { get; set; }
 
+        public Action<string> Log { get; set; }
+
         //This should run first
-        public async Task LoadItemsNeedingSync(SyncDbContext sourceContext)
+        public async Task<bool> LoadItemsNeedingSync(SyncDbContext sourceContext)
         {
             try
             {
-                ItemsChanged = await sourceContext.Set<T>().Where(SyncNeeded).ToListAsync();
-                SyncSuccess = new ConcurrentDictionary<T, long>();
-                if (ItemsChanged.Count > 0)
+                var query = sourceContext.Set<T>().Where(SyncNeeded);
+                if (query.Any())
                 {
-                    Console.WriteLine($"{ItemsChanged.Count} {typeof(T).Name} rows to sync.");
+                    ItemsChanged = await query.ToListAsync();
+
+                    SyncSuccess = new ConcurrentDictionary<T, long>();
+                    Log?.Invoke($"{ItemsChanged.Count} {typeof(T).Name} rows to sync.");
                     foreach (var item in ItemsChanged)
                     {
                         SyncSuccess[item] = GetSyncValue(item);
                     }
+                    return true;
+                }
+                else
+                {
+                    ItemsChanged = new List<T>();
+                    return false;
                 }
             }
             catch (Exception ex)
@@ -74,10 +84,16 @@ namespace SyncDbContext.Models
 
             var itemsToSync = ItemsChanged.Where(i => !CheckSyncColumn(i, successFlag)).ToList();
 
-            if (itemsToSync.Count == 0)
+            var itemCount = itemsToSync.Count;
+
+            if (itemCount == 0)
             {
                 return;
             }
+
+            var serverName = targetContext.Database.Connection.DataSource;
+            var dbName = targetContext.Database.Connection.Database;
+            Log?.Invoke($"Syncing {itemCount} {typeof(T).Name} row{(itemCount > 1 ? "s" : "")} to {serverName}/{dbName}");
 
             bool success = true;
             try
