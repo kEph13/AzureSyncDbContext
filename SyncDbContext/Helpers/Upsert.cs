@@ -21,7 +21,7 @@ namespace SyncDbContext.Helpers
         /// <summary>
         /// Do an upsert operation. Note that this executes immediately - savechanges is not necessary
         /// </summary>
-        public static async Task<TEntity> Upsert<TEntity>(this DbContext context, TEntity entity, UpsertModel<TEntity> model) where TEntity : class
+        public static async Task<int> Upsert<TEntity>(this DbContext context, TEntity entity, UpsertModel<TEntity> model) where TEntity : class
         {
 
             var list = new List<TEntity>()
@@ -29,11 +29,7 @@ namespace SyncDbContext.Helpers
                     entity
                 };
 
-            await new UpsertOp<TEntity>(context, list, model).Execute();
-
-            context.Entry(entity).State = EntityState.Unchanged;
-
-            return entity;
+            return await new UpsertOp<TEntity>(context, list, model).Execute();
         }
 
         public static async Task<int> Upsert<TEntity>(this DbContext context, List<TEntity> entities, UpsertModel<TEntity> model) where TEntity : class

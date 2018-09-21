@@ -22,6 +22,8 @@ namespace SyncDbContext
 
         public Action FinishedAction { get; set; }
 
+        public Func<SyncDbContext, long, Task<bool>> CheckSyncNeeded { get; set; }
+
         public Action<string> Log { get; set; }
 
         public SyncDbContext(string sourceConnectionString, List<string> targetConnectionStrings) : base(sourceConnectionString)
@@ -73,6 +75,15 @@ namespace SyncDbContext
             {
                 try
                 {
+                    if (CheckSyncNeeded != null)
+                    {
+                        var result = await CheckSyncNeeded(this, completeStatusValue);
+                        if (!result)
+                        {
+                            Log?.Invoke("Nothing to sync");
+                            return;
+                        }
+                    }
                     //Make new list to allow removal of broken models
                     foreach (var model in new List<ISyncModel>(models))
                     {

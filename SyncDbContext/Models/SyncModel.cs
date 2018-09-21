@@ -28,6 +28,11 @@ namespace SyncDbContext.Models
 
         private ConcurrentDictionary<T, long> SyncSuccess { get; set; }
 
+        //Each run fetches the items to update, so the objects aren't the same between runs
+        //So, keep track of errors using hash
+        //Also track targets separately in case one target has a schema problem
+        private static ConcurrentDictionary<(int keyHash, int targetId), int> ItemErrors { get; set; } = new ConcurrentDictionary<(int keyHash, int targetId), int>();
+
         public ConcurrentBag<Exception> Errors { get; set; } = new ConcurrentBag<Exception>();
 
         public UpsertModel<T> UpsertModel { get; set; }
@@ -40,29 +45,24 @@ namespace SyncDbContext.Models
             try
             {
                 var query = sourceContext.Set<T>().Where(SyncNeeded);
-                if (query.Any())
-                {
-                    ItemsChanged = await query.ToListAsync();
 
-                    SyncSuccess = new ConcurrentDictionary<T, long>();
-                    Log?.Invoke($"{ItemsChanged.Count} {typeof(T).Name} rows to sync.");
-                    foreach (var item in ItemsChanged)
-                    {
-                        SyncSuccess[item] = GetSyncValue(item);
-                    }
-                    return true;
-                }
-                else
+                ItemsChanged = await query.ToListAsync();
+                if (ItemsChanged.Count == 0)
                 {
-                    ItemsChanged = new List<T>();
                     return false;
                 }
+                SyncSuccess = new ConcurrentDictionary<T, long>();
+                Log?.Invoke($"{ItemsChanged.Count} {typeof(T).Name} rows to sync.");
+                foreach (var item in ItemsChanged)
+                {
+                    SyncSuccess[item] = GetSyncValue(item);
+                }
+                return true;
             }
             catch (Exception ex)
             {
                 throw new Exception("Error during item load: ", ex);
             }
-
         }
 
         private void UpdateSuccess(T item, long successFlag)
@@ -71,6 +71,38 @@ namespace SyncDbContext.Models
             {
                 return oldValue | successFlag;
             });
+        }
+
+        private int GetKeyHash(T item)
+        {
+            var keyFields = UpsertModel.KeyFields;
+            if (keyFields.Count == 1)
+            {
+                var colProp = typeof(T).GetProperty(keyFields.First());
+                var value = colProp.GetValue(item);
+                var hash = value.GetHashCode();
+                return hash;
+
+            }
+            var hashes = new List<int>();
+            if (keyFields.Count > 8)
+            {
+                throw new Exception("Too many keyfields to combine hashes");
+            }
+            foreach(var key in keyFields)
+            {
+                var colProp = typeof(T).GetProperty(key);
+                var value = colProp.GetValue(item);
+                hashes.Add(value.GetHashCode());
+            }
+            return CollectionExtensions.CombineHashCodes(hashes);
+        }
+
+        private string GetTargetName(SyncDbContext context)
+        {
+            var serverName = context.Database.Connection.DataSource;
+            var dbName = context.Database.Connection.Database;
+            return $"{serverName}\\{dbName}";
         }
 
         //Then this one, on each target
@@ -84,6 +116,25 @@ namespace SyncDbContext.Models
 
             var itemsToSync = ItemsChanged.Where(i => !CheckSyncColumn(i, successFlag)).ToList();
 
+            if (ItemErrors.Any())
+            {
+                int removed = 0;
+                //new list to allow removal
+                foreach(var item in new List<T>(itemsToSync))
+                {
+                    if (CheckItemErrors(item, targetNumber) > 2)
+                    {
+                        //Don't keep retrying error items
+                        itemsToSync.Remove(item);
+                        removed++;
+                    }
+                }
+                if (removed > 0)
+                {
+                    Log?.Invoke($"Skipping {removed} row{(removed > 1 ? "s" : "")} on target {GetTargetName(targetContext)} - too many errors");
+                }
+            }
+
             var itemCount = itemsToSync.Count;
 
             if (itemCount == 0)
@@ -91,9 +142,8 @@ namespace SyncDbContext.Models
                 return;
             }
 
-            var serverName = targetContext.Database.Connection.DataSource;
-            var dbName = targetContext.Database.Connection.Database;
-            Log?.Invoke($"Syncing {itemCount} {typeof(T).Name} row{(itemCount > 1 ? "s" : "")} to {serverName}/{dbName}");
+
+            Log?.Invoke($"Syncing {itemCount} {typeof(T).Name} row{(itemCount > 1 ? "s" : "")} to {GetTargetName(targetContext)}");
 
             bool success = true;
             try
@@ -101,7 +151,10 @@ namespace SyncDbContext.Models
 
                 //Try to one-shot the updates
                 var result = await targetContext.Upsert(itemsToSync, UpsertModel);
-                //todo: check value
+                if (result != itemCount)
+                {
+                    throw new Exception("Item count did not match merge results");
+                }
                 foreach (var item in itemsToSync)
                 {
                     UpdateSuccess(item, successFlag);
@@ -116,8 +169,13 @@ namespace SyncDbContext.Models
                     for (int i = 0; i < Math.Ceiling(itemsToSync.Count / Convert.ToDecimal(allowedEntityCount)); i++)
                     {
                         var items = itemsToSync.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
+
                         var result = await targetContext.Upsert(items, UpsertModel);
-                        //todo: check result
+
+                        if (result != items.Count)
+                        {
+                            throw new Exception("Item count did not match merge results");
+                        }
                         foreach (var item in items)
                         {
                             UpdateSuccess(item, successFlag);
@@ -145,6 +203,7 @@ namespace SyncDbContext.Models
                     try
                     {
                         var done = false;
+                        //If the error came from a batch, some items might be done already. Only update ones that aren't
                         if (SyncSuccess.TryGetValue(item, out long value))
                         {
                             done = (value & successFlag) > 0;
@@ -152,17 +211,38 @@ namespace SyncDbContext.Models
                         if (!done)
                         {
                             var result = await targetContext.Upsert(item, UpsertModel);
-                            //todo: check value
+                            if (result != 1)
+                            {
+                                throw new Exception("Item count did not match merge results");
+                            }
 
                             UpdateSuccess(item, successFlag);
                         }
                     }
                     catch (Exception ex)
                     {
+                        UpdateItemErrors(item, targetNumber);
                         Errors.Add(ex);
                     }
                 }
             }
+        }
+
+        private int CheckItemErrors(T item, int targetNumber)
+        {
+            if (ItemErrors.TryGetValue((GetKeyHash(item), targetNumber), out int count))
+            {
+                return count;
+            }
+            return 0;
+        }
+
+        private void UpdateItemErrors(T item, int targetNumber)
+        {
+            ItemErrors.AddOrUpdate((GetKeyHash(item), targetNumber), 1, (key, oldValue) =>
+            {
+                return oldValue + 1;
+            });
         }
 
         private void UpdateSyncColumn(T item, long flag)
