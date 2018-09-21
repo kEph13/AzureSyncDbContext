@@ -154,17 +154,5 @@ namespace SyncDbContext
                 await model.SyncItems(targetContext, targetNumber);
             }
         }
-
-        //protected sealed override void OnModelCreating(DbModelBuilder modelBuilder)
-        //{
-        //    var syncTypes = modelBuilder.Types().Where(t => t.IsSubclassOf(typeof(SyncEntityBase)));
-        //    if (isTarget)
-        //    {
-        //        //Don't expect the SyncStatus column to exist on the targets
-        //        syncTypes.Configure(c => c.Ignore("SyncStatus"));
-        //    }
-        //    base.OnModelCreating(modelBuilder);
-        //}
-
     }
 }
