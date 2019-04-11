@@ -6,13 +6,14 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity;
+using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace SyncDbContext
 {
-    public class SyncDbContext : DbContext
+    public class SyncDbContext : DbContext, IDbModelCacheKeyProvider
     {
         private readonly List<string> targetConnectionStrings;
         private readonly long completeStatusValue;
@@ -26,6 +27,10 @@ namespace SyncDbContext
 
         public Action<string> Log { get; set; }
 
+        private bool isTargetContext;
+
+        public string CacheKey => isTargetContext ? "target" : "source";
+
         public SyncDbContext(string sourceConnectionString, List<string> targetConnectionStrings) : base(sourceConnectionString)
         {
             this.targetConnectionStrings = targetConnectionStrings;
@@ -33,10 +38,27 @@ namespace SyncDbContext
             //this represents all targets sync'd - i.e. 1111 for 4 targets
             completeStatusValue = Convert.ToInt64(Math.Pow(2, targetConnectionStrings.Count()) - 1);
             flagStatuses = new ConcurrentDictionary<object, long>();
+
+            isTargetContext = false;
         }
 
-        private SyncDbContext(string targetConnectionString) : base(targetConnectionString)
+        private SyncDbContext(string targetConnectionString, List<ISyncModel> models) : base(targetConnectionString)
         {
+            isTargetContext = true;
+
+            //Need these for OnModelCreating
+            this.models = models;
+        }
+
+        protected override void OnModelCreating(DbModelBuilder modelBuilder)
+        {
+            if (isTargetContext)
+            {
+                foreach (var model in models)
+                {
+                    model.RegisterModel(modelBuilder);
+                }
+            }
         }
 
         protected void AddToSyncList<TEntity>() where TEntity : class
@@ -52,12 +74,22 @@ namespace SyncDbContext
 
             var syncColumnName = syncColumn.First().Name;
 
+            var deleteColumn = typeof(TEntity).GetProperties().Where(prop => Attribute.IsDefined(prop, typeof(DeleteColumnAttribute)));
+
+            var deleteColumnName = deleteColumn?.FirstOrDefault()?.Name;
+
+            if (deleteColumnName != null)
+            {
+                model.DeleteColumnName = deleteColumnName;
+            }
+
             model.SyncColumnName = syncColumnName;
 
             model.SyncNeeded = ExpressionHelper.CheckItemInequality<TEntity>(syncColumnName, completeStatusValue);
 
             model.UpsertModel = EntityHelper<TEntity>.GetUpsertModel(this);
             model.UpsertModel.SyncColumn = syncColumnName;
+
 
             model.Log = (string msg) => Log?.Invoke(msg);
 
@@ -158,7 +190,7 @@ namespace SyncDbContext
 
         private async Task SyncToTarget(string target, int targetNumber)
         {
-            var targetContext = new SyncDbContext(target);
+            var targetContext = new SyncDbContext(target, models);
             var toReturn = new List<Exception>();
             foreach (var model in models)
             {

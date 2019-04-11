@@ -9,4 +9,6 @@ namespace SyncDbContext.Attributes
     public class SyncColumnAttribute : Attribute
     {
     }
+
+    public class DeleteColumnAttribute : Attribute { }
 }

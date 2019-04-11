@@ -1,4 +1,5 @@
-﻿using SyncDbContext.Exceptions;
+﻿using MoreLinq;
+using SyncDbContext.Exceptions;
 using SyncDbContext.Helpers;
 using System;
 using System.Collections.Concurrent;
@@ -17,11 +18,28 @@ namespace SyncDbContext.Models
         void UpdateStatuses();
         ConcurrentBag<Exception> Errors { get; set; }
         Action<string> Log { get; set; }
+        Type Type { get; }
+        void RegisterModel(DbModelBuilder modelBuilder);
     }
 
     public class SyncModel<T> : ISyncModel where T : class
     {
+        public Type Type
+        {
+            get
+            {
+                return typeof(T);
+            }
+        }
+
+        public void RegisterModel(DbModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity<T>()
+                .ToTable(UpsertModel.FullTableName);
+                
+        }
         public string SyncColumnName { get; set; }
+        public string DeleteColumnName { get; set; }
         public Expression<Func<T, bool>> SyncNeeded { get; set; }
 
         public List<T> ItemsChanged { get; set; }
@@ -89,7 +107,7 @@ namespace SyncDbContext.Models
             {
                 throw new Exception("Too many keyfields to combine hashes");
             }
-            foreach(var key in keyFields)
+            foreach (var key in keyFields)
             {
                 var colProp = typeof(T).GetProperty(key);
                 var value = colProp.GetValue(item);
@@ -120,7 +138,7 @@ namespace SyncDbContext.Models
             {
                 int removed = 0;
                 //new list to allow removal
-                foreach(var item in new List<T>(itemsToSync))
+                foreach (var item in new List<T>(itemsToSync))
                 {
                     if (CheckItemErrors(item, targetNumber) > 2)
                     {
@@ -142,23 +160,52 @@ namespace SyncDbContext.Models
                 return;
             }
 
-
             Log?.Invoke($"Syncing {itemCount} {typeof(T).Name} row{(itemCount > 1 ? "s" : "")} to {GetTargetName(targetContext)}");
 
             bool success = true;
+
+            var deleted = new List<T>();
+            var notDeleted = new List<T>();
+
+            if (DeleteColumnName != null)
+            {
+                var propInfo = typeof(T).GetProperty(DeleteColumnName);
+                foreach (var item in itemsToSync)
+                {
+                    var deleteFlag = propInfo.GetValue(item);
+                    if ((deleteFlag as bool?) == true)
+                    {
+                        deleted.Add(item);
+                    }
+                    else
+                    {
+                        notDeleted.Add(item);
+                    }
+                }
+            }
+            else
+            {
+                notDeleted = itemsToSync;
+            }
+
             try
             {
-
                 //Try to one-shot the updates
-                var result = await targetContext.Upsert(itemsToSync, UpsertModel);
-                if (result != itemCount)
+                (int upsertedCount, int deletedCount) = await targetContext.HandleEntities(notDeleted, deleted, UpsertModel);
+                if (upsertedCount != notDeleted.Count)
                 {
-                    throw new Exception("Item count did not match merge results");
+                    Log?.Invoke($"Warning: returned row count {upsertedCount} did not match expected rows modified ({notDeleted.Count})");
                 }
+                if (deletedCount != deleted.Count)
+                {
+                    Log?.Invoke($"Warning: deleted row count {deletedCount} did not match expected rows modified ({deleted.Count})");
+                }
+
                 foreach (var item in itemsToSync)
                 {
                     UpdateSuccess(item, successFlag);
                 }
+
             }
             catch (TooManyItemsException)
             {
@@ -166,17 +213,31 @@ namespace SyncDbContext.Models
                 {
                     //batch
                     var allowedEntityCount = 2000 / UpsertModel.PropertyNames.Count;
-                    for (int i = 0; i < Math.Ceiling(itemsToSync.Count / Convert.ToDecimal(allowedEntityCount)); i++)
+                    var batchedUpserts = notDeleted.Batch(allowedEntityCount).ToList();
+                    var batchedDeletes = deleted.Batch(allowedEntityCount).ToList();
+                    int loopCount = Math.Max(batchedDeletes.Count, batchedUpserts.Count);
+
+                    for (int i = 0; i < loopCount; i++)
                     {
-                        var items = itemsToSync.Skip(i * allowedEntityCount).Take(allowedEntityCount).ToList();
+                        var batchOfUpserts = batchedUpserts.Count() > i ? batchedUpserts[i].ToList() : new List<T>();
+                        var batchOfDeletes = batchedDeletes.Count > i ? batchedDeletes[i].ToList() : new List<T>();
 
-                        var result = await targetContext.Upsert(items, UpsertModel);
+                        (int upsertedCount, int deletedCount) = await targetContext.HandleEntities(batchOfUpserts, batchOfDeletes, UpsertModel);
 
-                        if (result != items.Count)
+                        if (upsertedCount != notDeleted.Count)
                         {
-                            throw new Exception("Item count did not match merge results");
+                            Log?.Invoke($"Warning: returned row count {upsertedCount} did not match expected rows modified ({notDeleted.Count})");
                         }
-                        foreach (var item in items)
+                        if (deletedCount != deleted.Count)
+                        {
+                            Log?.Invoke($"Warning: deleted row count {deletedCount} did not match expected rows modified ({deleted.Count})");
+                        }
+
+                        foreach (var item in batchOfUpserts)
+                        {
+                            UpdateSuccess(item, successFlag);
+                        }
+                        foreach (var item in batchOfDeletes)
                         {
                             UpdateSuccess(item, successFlag);
                         }
@@ -198,7 +259,35 @@ namespace SyncDbContext.Models
             if (!success)
             {
                 //If that failed, run one by one
-                foreach (var item in itemsToSync)
+                foreach (var item in deleted)
+                {
+                    try
+                    {
+                        var done = false;
+                        //If the error came from a batch, some items might be done already. Only update ones that aren't
+                        if (SyncSuccess.TryGetValue(item, out long value))
+                        {
+                            done = (value & successFlag) > 0;
+                        }
+                        if (!done)
+                        {
+                            var result = await targetContext.Delete(new List<T> { item }, UpsertModel);
+                            if (result != 1)
+                            {
+                                Log?.Invoke($"Warning: deleted row count {result} did not match expected rows modified (1)");
+                            }
+
+                            UpdateSuccess(item, successFlag);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        UpdateItemErrors(item, targetNumber);
+                        Errors.Add(ex);
+                    }
+                }
+
+                foreach (var item in notDeleted)
                 {
                     try
                     {
@@ -213,7 +302,7 @@ namespace SyncDbContext.Models
                             var result = await targetContext.Upsert(item, UpsertModel);
                             if (result != 1)
                             {
-                                throw new Exception("Item count did not match merge results");
+                                Log?.Invoke($"Warning: returned row count {result} did not match expected rows modified (1)");
                             }
 
                             UpdateSuccess(item, successFlag);

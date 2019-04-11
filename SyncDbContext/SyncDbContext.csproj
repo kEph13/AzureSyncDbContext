@@ -44,9 +44,15 @@
     <Reference Include="Mono.Linq.Expressions, Version=1.2.0.0, Culture=neutral, PublicKeyToken=0738eb9f132ed756, processorArchitecture=MSIL">
       <HintPath>..\packages\Mono.Linq.Expressions.1.2.0.0\lib\Mono.Linq.Expressions.dll</HintPath>
     </Reference>
+    <Reference Include="MoreLinq, Version=3.1.1.0, Culture=neutral, PublicKeyToken=384d532d7e88985d, processorArchitecture=MSIL">
+      <HintPath>..\..\AzureSync\packages\morelinq.3.1.1\lib\net451\MoreLinq.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.DataAnnotations" />
     <Reference Include="System.Core" />
+    <Reference Include="System.ValueTuple, Version=4.0.2.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
+      <HintPath>..\..\AzureSync\packages\System.ValueTuple.4.4.0\lib\net47\System.ValueTuple.dll</HintPath>
+    </Reference>
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="Microsoft.CSharp" />
@@ -62,6 +68,7 @@
     <Compile Include="Helpers\Expressions.cs" />
     <Compile Include="Helpers\GetKey.cs" />
     <Compile Include="Helpers\Reflection.cs" />
+    <Compile Include="Helpers\InsertWhereNotExists.cs" />
     <Compile Include="Helpers\Upsert.cs" />
     <Compile Include="Models\SyncModel.cs" />
     <Compile Include="Models\UpsertModel.cs" />
